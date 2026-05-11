@@ -3,8 +3,9 @@ from discord.ext import commands
 import os
 from supabase import create_client, Client
 
-# --- 設定項目 ---
-TOKEN = "MTM1ODAyNDA2MjkxMTM4NTczMg.G2SxMz.8Z5sCUXECq_JuqXjrR4gG1BV5D4Rg1Zr2nUSIg"
+# --- 設定項目 ---# main.py の 6行目をこのように書き換え
+# main.py の 6行目付近をこれに書き換え
+TOKEN = os.getenv("TOKEN") or "MTM1ODAyNDA2MjkxMTM4NTczMg.GzoW9w.8p4tjwMP_tik-qmCICmczFyoMnhgKbP2ssGehI"
 SUPABASE_URL = "https://vlkydiqtnojdpeictmfy.supabase.co"
 SUPABASE_KEY = "sb_publishable_flcUiiaSmbpVYgaCMuenQQ_wkUJ7EG2" 
 GUILD_ID = 1492877145964286062
