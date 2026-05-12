@@ -9,11 +9,11 @@ from utils import process_rank_system
 # --- 予約ログ用チャンネルID ---
 LOG_CHANNEL_ID = 1498696009797075176
 
-# --- 予約用モーダル ---
+# --- 1. 予約用モーダル ---
 class OripaReserveModal(Modal):
-    def __init__(self, view, item):
+    def __init__(self, bot, item, view_instance):
         super().__init__(title=f"予約：{item['name']}")
-        self.view, self.item = view, item
+        self.bot, self.item, self.view_instance = bot, item, view_instance
         self.amount = TextInput(
             label=f"購入口数 (一人最大 {item['user_limit']} 口)", 
             placeholder=f"1～{item['user_limit']}の数字を入力", 
@@ -31,8 +31,8 @@ class OripaReserveModal(Modal):
         user_id = str(interaction.user.id)
         oripa_id = self.item['id']
         
-        # --- 最新の予約状況をDBから取得 ---
-        res_res = self.view.bot.supabase.table("oripa_reservations").select("user_id").eq("oripa_id", oripa_id).execute()
+        # 最新の予約状況をDBから取得
+        res_res = self.bot.supabase.table("oripa_reservations").select("user_id").eq("oripa_id", oripa_id).execute()
         db_reserved_ids = [r['user_id'] for r in res_res.data]
         
         already_reserved = db_reserved_ids.count(user_id)
@@ -49,57 +49,69 @@ class OripaReserveModal(Modal):
         if buy_count > remaining or buy_count <= 0:
             return await interaction.followup.send(f"❌ 残り口数エラー（残り {remaining} 口）", ephemeral=True)
         
-        # 1. 支払い可能かチェック（現在のコイン数のみ取得）
-        res = self.view.bot.supabase.table("user_coins").select("coin_count").eq("user_id", user_id).execute()
+        # 1. 支払い可能かチェック
+        res = self.bot.supabase.table("user_coins").select("coin_count").eq("user_id", user_id).execute()
         current_coins = res.data[0].get("coin_count", 0) if res.data else 0
-        
         total_price = self.item['price'] * buy_count
         
         if current_coins < total_price:
             return await interaction.followup.send(f"❌ コイン不足 (必要: {total_price}枚 / 所持: {current_coins}枚)", ephemeral=True)
         
-        # 2. 【重要】これ一行で「コイン減算」「週間加算」「月間加算」「ランク判定」を全部実行
-        # 手動の長い update ブロックは削除してこれに差し替えます
-        rank_embed = await process_rank_system(self.view.bot, interaction.user.id, total_price)
+        # 2. ランク・コイン一括処理
+        rank_embed = await process_rank_system(self.bot, interaction.user.id, total_price)
 
-        # 3. 予約登録処理 (ここは元のロジックを維持)
-        # self.view.bot.supabase.table("oripa_reservations").insert(...) 等が続く
-        # --- DBに予約を保存 ---
+        # 3. DB登録
         for _ in range(buy_count):
-            self.view.bot.supabase.table("oripa_reservations").insert({"oripa_id": oripa_id, "user_id": user_id}).execute()
+            self.bot.supabase.table("oripa_reservations").insert({"oripa_id": oripa_id, "user_id": user_id}).execute()
         
         # 📢 予約ログ送信
-        log_chan = self.view.bot.get_channel(LOG_CHANNEL_ID)
+        log_chan = self.bot.get_channel(LOG_CHANNEL_ID)
         if log_chan:
             await log_chan.send(f"📝 **予約ログ**: {interaction.user.mention} が 「{self.item['name']}」を **{buy_count}口** 予約しました。")
 
-        # 最新の件数で表示更新
+        # 表示更新
         new_total = len(db_reserved_ids) + buy_count
-        self.view.reserve_btn.label = f"予約する ({new_total}/{self.item['max_slots']})"
+        
+        # ボタンの状態を更新して再送
+        self.view_instance.update_button_label(new_total)
         
         if new_total >= self.item['max_slots']:
-            self.view.reserve_btn.disabled, self.view.reserve_btn.label = True, "完売・抽選中"
-            await interaction.message.edit(view=self.view)
-            await self.view.run_lottery(interaction, oripa_id)
+            self.view_instance.reserve_btn.disabled = True
+            self.view_instance.reserve_btn.label = "完売・抽選中"
+            await interaction.message.edit(view=self.view_instance)
+            await self.view_instance.run_lottery(interaction, oripa_id)
         else:
-            await interaction.message.edit(view=self.view)
-            await interaction.followup.send(f"✅ {buy_count}口予約完了！（合計: {already_reserved + buy_count}口）", ephemeral=True)
+            await interaction.message.edit(view=self.view_instance)
+            await interaction.followup.send(f"✅ {buy_count}口予約完了！（合計: {already_reserved + buy_count}口）\n※ランク変動がある場合は通知されます。", embed=rank_embed, ephemeral=True)
 
-# --- オリパ表示View ---
+# --- 2. オリパ表示View ---
 class ReservedOripaView(View):
-    def __init__(self, bot, item, current_count):
+    def __init__(self, bot=None, item=None, current_count=0):
+        # 永続化のために custom_id を振る場合は、item_id などを含める工夫が必要
+        # ここでは各オリパごとに一意のIDを付与
         super().__init__(timeout=None)
         self.bot, self.item = bot, item
-        # ボタンのラベルにDBから取得した現在の予約数を反映
-        self.reserve_btn.label = f"予約する ({current_count}/{item['max_slots']})"
-        if current_count >= item['max_slots']:
-            self.reserve_btn.disabled, self.reserve_btn.label = True, "完売・抽選中"
+        
+        if item:
+            self.reserve_btn.custom_id = f"oripa_res_{item['id']}"
+            self.update_button_label(current_count)
+
+    def update_button_label(self, count):
+        if self.item:
+            self.reserve_btn.label = f"予約する ({count}/{self.item['max_slots']})"
+            if count >= self.item['max_slots']:
+                self.reserve_btn.disabled = True
+                self.reserve_btn.label = "完売・抽選中"
 
     @discord.ui.button(label="予約する", style=discord.ButtonStyle.danger, emoji="🔥")
     async def reserve_btn(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(OripaReserveModal(self, self.item))
+        # 起動直後などは self.item が空になる可能性があるため、DBから再取得するロジックが必要（後述のsetup_hook参照）
+        if not self.item:
+            return await interaction.response.send_message("❌ このボタンは現在無効です。もう一度 `/oripa` を実行してください。", ephemeral=True)
+        await interaction.response.send_modal(OripaReserveModal(self.bot, self.item, self))
 
     async def run_lottery(self, interaction, oripa_id):
+        # --- 抽選ロジック (元のコードを維持) ---
         result_channel_id = 1497445916406448320
         chan = self.bot.get_channel(result_channel_id)
         if not chan: return
@@ -107,13 +119,11 @@ class ReservedOripaView(View):
         await chan.send(f"📢 **{self.item['name']}** 完売！抽選を開始します...")
         await asyncio.sleep(3)
 
-        # DBから確定した予約者リストを取得
         res = self.bot.supabase.table("oripa_reservations").select("user_id").eq("oripa_id", oripa_id).execute()
         ids = [r['user_id'] for r in res.data]
         random.shuffle(ids)
         
         prize_data = self.item.get('prizes', "")
-        prizes_dict = {} 
         all_prizes = []
         if prize_data:
             for p in prize_data.split(','):
@@ -122,41 +132,32 @@ class ReservedOripaView(View):
                     all_prizes.extend([p_name] * int(count))
         
         back_coin = self.item.get('back_coin_amount', 0)
-        
+        prizes_dict = {}
+
         for i, user_id in enumerate(ids):
             prize_name = all_prizes[i] if i < len(all_prizes) else "参加賞"
             if prize_name not in prizes_dict: prizes_dict[prize_name] = []
             prizes_dict[prize_name].append(f"<@{user_id}>")
             
             if prize_name == "参加賞" and back_coin > 0:
-                c_res = self.bot.supabase.table("user_coins").select("coin_count").eq("user_id", user_id).execute()
+                c_res = self.bot.supabase.table("user_coins").select("coin_count, weekly_gain").eq("user_id", user_id).execute()
                 curr = c_res.data[0]['coin_count'] if c_res.data else 0
-                self.bot.supabase.table("user_coins").upsert({"user_id": user_id, "coin_count": curr + back_coin}).execute()
+                curr_weekly = c_res.data[0].get('weekly_gain', 0) if c_res.data else 0
+                
+                self.bot.supabase.table("user_coins").upsert({
+                    "user_id": user_id, 
+                    "coin_count": curr + back_coin,
+                    "weekly_gain": curr_weekly + back_coin
+                }).execute()
 
         embed = discord.Embed(title=f"🎉 【{self.item['name']}】 抽選結果", color=0xFFD700)
         for p_name, users in prizes_dict.items():
             embed.add_field(name=f"🎉 当選：{p_name}", value="\n".join(users), inline=False)
 
         await chan.send(embed=embed)
-        # オリパ終了処理
         self.bot.supabase.table("oripa_items").update({"active": False}).eq("id", oripa_id).execute()
-        # 予約データもクリーンアップ（任意）
-        # self.bot.supabase.table("oripa_reservations").delete().eq("oripa_id", oripa_id).execute()
 
-        # --- oripa.py の該当箇所を以下に書き換え ---
-        if prize_name == "参加賞" and back_coin > 0:
-                c_res = self.bot.supabase.table("user_coins").select("coin_count, weekly_gain").eq("user_id", user_id).execute()
-                curr = c_res.data[0]['coin_count'] if c_res.data else 0
-                curr_weekly = c_res.data[0].get('weekly_gain', 0) if c_res.data else 0 # 週間分を取得
-                
-                # 所持金と今週の獲得分を両方更新
-                self.bot.supabase.table("user_coins").upsert({
-                    "user_id": user_id, 
-                    "coin_count": curr + back_coin,
-                    "weekly_gain": curr_weekly + back_coin # 今週分を加算
-                }).execute()
-
-# --- オリパCog ---
+# --- 3. オリパCog ---
 class Oripa(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -170,11 +171,7 @@ class Oripa(commands.Cog):
         data = {"name": name, "description": subtitle, "price": price, "command_name": category.lower(), "max_slots": max_slots, "prizes": prizes, "user_limit": user_limit, "back_coin_amount": back_coin, "image_url": img_url, "active": True}
         self.bot.supabase.table("oripa_items").insert(data).execute()
         
-        await interaction.followup.send(
-            f"@everyone ✅ 「{name}」を登録しました！\n"
-            f"**カテゴリー名: {category.lower()}**", 
-            ephemeral=True
-        )
+        await interaction.followup.send(f"@everyone ✅ 「{name}」を登録しました！", ephemeral=True)
 
     @app_commands.command(name="oripa", description="販売中のオリパを表示")
     @app_commands.rename(category="カテゴリ名")
@@ -184,7 +181,6 @@ class Oripa(commands.Cog):
         if not res.data: return await interaction.followup.send(f"現在販売中のオリパはありません。")
         
         for item in res.data:
-            # DBから現在の予約済み件数を取得
             res_count = self.bot.supabase.table("oripa_reservations").select("id", count="exact").eq("oripa_id", item['id']).execute()
             current_count = res_count.count if res_count.count is not None else 0
             
@@ -194,7 +190,6 @@ class Oripa(commands.Cog):
             embed.add_field(name="💰 価格", value=f"{item['price']} 枚", inline=True)
             embed.add_field(name="📦 総口数", value=f"{item['max_slots']} 口", inline=True)
             embed.add_field(name="👤 制限", value=f"最大 {item['user_limit']} 口", inline=True)
-            embed.set_footer(text=f"カテゴリ: {item['command_name']}")
             
             if item.get('image_url'): embed.set_image(url=item['image_url'])
             await interaction.followup.send(embed=embed, view=view)

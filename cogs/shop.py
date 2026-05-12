@@ -12,17 +12,24 @@ INVITE_CODES = {
 
 # --- 1. 管理者が承認ボタンを押した時の処理 ---
 class AdminCoinVerifyView(View):
-    def __init__(self, bot, coins, user, price, link, code_used):
-        super().__init__(timeout=None)
+    # main.pyから呼び出せるよう引数をオプション(None)に設定
+    def __init__(self, bot=None, coins=None, user=None, price=None, link=None, code_used=None):
+        super().__init__(timeout=None) # 永続化のためtimeoutはNone
         self.bot, self.coins, self.user, self.price, self.link = bot, coins, user, price, link
         self.code_used = code_used
 
-    @discord.ui.button(label="【管理者用】支払いを承認する", style=discord.ButtonStyle.danger)
+    # custom_id を付与して永続化
+    @discord.ui.button(label="【管理者用】支払いを承認する", style=discord.ButtonStyle.danger, custom_id="admin_verify_coin_permanent")
     async def verify(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ 権限がありません", ephemeral=True)
         
         await interaction.response.defer(ephemeral=True)
+        
+        # 再起動後に情報が消えていた場合の安全策（メッセージから情報を復元するなどの拡張も可能）
+        if self.bot is None:
+            return await interaction.edit_original_response(content="⚠️ ボットの再起動により一時的に情報が失われました。手動で付与してください。")
+
         self.bot.add_data(self.user.id, coins=self.coins)
         
         await interaction.edit_original_response(content=f"✅ {self.user.display_name}さんに {self.coins}枚 付与しました！", view=None)
@@ -32,7 +39,7 @@ class AdminCoinVerifyView(View):
         except:
             pass
 
-# --- 2. 購入時の入力フォーム ---
+# --- 2. 購入時の入力フォーム (ここは変更なし) ---
 class CoinPaymentModal(Modal):
     def __init__(self, bot, price, coins):
         super().__init__(title=f"{price}円コイン購入申請")
@@ -50,7 +57,6 @@ class CoinPaymentModal(Modal):
         final_price = self.price
         code_status = "未使用"
         
-        # 招待コードの判定
         input_code = self.invite_code.value.strip()
         if input_code in INVITE_CODES:
             discount = INVITE_CODES[input_code]
@@ -81,27 +87,35 @@ class CoinPaymentModal(Modal):
         )
 
 # --- 3. ショップコマンド ---
+class ShopView(View): # ShopViewをクラスとして独立（永続化のため）
+    def __init__(self, bot=None):
+        super().__init__(timeout=None)
+        self.bot = bot
+        
+        prices = [(500, 500), (1000, 1050), (3000, 3200), (5000, 5500), (10000, 11500)]
+        for p, c in prices:
+            btn = Button(
+                label=f"{p}円 ({c}枚)", 
+                style=discord.ButtonStyle.primary,
+                custom_id=f"shop_btn_{p}" # ボタンごとに固有のIDを振る
+            )
+            btn.callback = self.make_callback(p, c)
+            self.add_item(btn)
+
+    def make_callback(self, pv, cv):
+        async def callback(i: discord.Interaction):
+            await i.response.send_modal(CoinPaymentModal(self.bot, pv, cv))
+        return callback
+
 class Shop(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     @app_commands.command(name="shop", description="コイン購入メニューを表示")
     async def shop(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=False)
-        
-        prices = [(500, 500), (1000, 1050), (3000, 3200), (5000, 5500), (10000, 11500)]
         embed = discord.Embed(title="🪙 コインショップ", description="招待コードで**30%OFF**になります！", color=discord.Color.gold())
-        
-        view = View(timeout=None)
-        for p, c in prices:
-            btn = Button(label=f"{p}円 ({c}枚)", style=discord.ButtonStyle.primary)
-            def make_callback(pv, cv):
-                async def callback(i): await i.response.send_modal(CoinPaymentModal(self.bot, pv, cv))
-                return callback
-            btn.callback = make_callback(p, c)
-            view.add_item(btn)
-            
-        await interaction.followup.send(embed=embed, view=view)
+        # 永続化されたViewを使用して送信
+        await interaction.response.send_message(embed=embed, view=ShopView(self.bot))
 
 async def setup(bot):
     await bot.add_cog(Shop(bot))

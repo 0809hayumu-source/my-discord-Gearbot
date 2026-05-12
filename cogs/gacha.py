@@ -40,48 +40,24 @@ async def execute_gacha_logic(bot, target, count, user, current_total_tickets, i
     else:
         await target.followup.send(content=content, embed=embed)
 
-        
-
-# --- コインガチャ最終確認View ---
+# --- 1. コインガチャ最終確認View ---
 class CoinGachaConfirmView(View):
-    def __init__(self, bot, cost, count):
-        super().__init__(timeout=60)
+    def __init__(self, bot=None, cost=None, count=None):
+        super().__init__(timeout=None) # 永続化
         self.bot, self.cost, self.count = bot, cost, count
 
-    @discord.ui.button(label="本当に回す", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="本当に回す", style=discord.ButtonStyle.danger, custom_id="gacha_confirm_yes")
     async def confirm(self, interaction: discord.Interaction, button: Button):
-        # 1. 最初に defer して処理時間を確保
         await interaction.response.defer(ephemeral=True)
         
-        # 2. 現在のコイン残高をチェック（支払い可能か確認）
         res_coin = self.bot.supabase.table("user_coins").select("coin_count").eq("user_id", str(interaction.user.id)).execute()
         current_coins = res_coin.data[0].get("coin_count", 0) if res_coin.data else 0
 
         if current_coins < self.cost:
             return await interaction.followup.send("❌ コインが足りません。", ephemeral=True)
         
-        # 3. 【重要】これ一行で「コイン減らす」「週間加算」「月間加算」「ランク判定」を全部実行
-        # 戻り値としてランクゲージの Embed を受け取ります
         rank_embed = await process_rank_system(self.bot, interaction.user.id, self.cost)
         
-        # 4. チケット情報の取得（これ以降は元のロジックを維持）
-        res_ticket = self.bot.supabase.table("user_tickets").select("count").eq("user_id", str(interaction.user.id)).execute()
-        current_tickets = res_ticket.data[0].get("count", 0) if res_ticket.data else 0
-        
-        log_channel = self.bot.get_channel(1498675526653710366)
-        
-        if log_channel:
-            # 抽選実行
-            await execute_gacha_logic(self.bot, log_channel, self.count, interaction.user, current_tickets, is_coin=True)
-            # 完了メッセージを更新
-            await interaction.edit_original_response(content=f"✅ 完了！ {log_channel.mention} を確認してください。", view=None)
-            # 5. 最後にランクゲージを表示
-            await interaction.followup.send(embed=rank_embed, ephemeral=True)
-        else:
-            await execute_gacha_logic(self.bot, interaction, self.count, interaction.user, current_tickets, is_coin=False)
-            await interaction.followup.send(embed=rank_embed, ephemeral=True)
-        
-        # チケット情報の取得
         res_ticket = self.bot.supabase.table("user_tickets").select("count").eq("user_id", str(interaction.user.id)).execute()
         current_tickets = res_ticket.data[0].get("count", 0) if res_ticket.data else 0
         
@@ -90,45 +66,46 @@ class CoinGachaConfirmView(View):
         if log_channel:
             await execute_gacha_logic(self.bot, log_channel, self.count, interaction.user, current_tickets, is_coin=True)
             await interaction.edit_original_response(content=f"✅ 完了！ {log_channel.mention} を確認してください。", view=None)
+            await interaction.followup.send(embed=rank_embed, ephemeral=True)
         else:
             await execute_gacha_logic(self.bot, interaction, self.count, interaction.user, current_tickets, is_coin=False)
+            await interaction.followup.send(embed=rank_embed, ephemeral=True)
 
-            
-
-    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary, custom_id="gacha_confirm_no")
     async def cancel(self, interaction: discord.Interaction, button: Button):
         await interaction.response.edit_message(content="❌ キャンセルしました。", view=None)
 
-# --- 承認後の実行ボタン (PayPay用) ---
+# --- 2. 承認後の実行ボタン (PayPay用) ---
 class GachaExecuteView(View):
-    def __init__(self, bot, count, user):
+    def __init__(self, bot=None, count=None, user=None):
         super().__init__(timeout=None)
         self.bot, self.count, self.user = bot, count, user
 
-    @discord.ui.button(label="🔥 ガチャを回す", style=discord.ButtonStyle.danger, emoji="🎰")
+    @discord.ui.button(label="🔥 ガチャを回す", style=discord.ButtonStyle.danger, emoji="🎰", custom_id="gacha_execute_btn")
     async def execute(self, interaction: discord.Interaction, button: Button):
-        if interaction.user.id != self.user.id:
+        if self.user and interaction.user.id != self.user.id:
             return await interaction.response.send_message("❌ 本人のみ可能です。", ephemeral=True)
+        
         await interaction.response.defer()
-        res = self.bot.supabase.table("user_tickets").select("count").eq("user_id", str(self.user.id)).execute()
+        res = self.bot.supabase.table("user_tickets").select("count").eq("user_id", str(interaction.user.id)).execute()
         current_tickets = res.data[0].get("count", 0) if res.data else 0
-        await execute_gacha_logic(self.bot, interaction, self.count, self.user, current_tickets, is_coin=False)
+        await execute_gacha_logic(self.bot, interaction, self.count, interaction.user, current_tickets, is_coin=False)
         await interaction.edit_original_response(content="✅ ガチャを回しました。", view=None)
 
-# --- 管理者承認View ---
+# --- 3. 管理者承認View ---
 class AdminGachaVerifyView(View):
-    def __init__(self, bot, count, user):
+    def __init__(self, bot=None, count=None, user=None):
         super().__init__(timeout=None)
         self.bot, self.count, self.user = bot, count, user
 
-    @discord.ui.button(label="【管理者用】承認", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="【管理者用】承認", style=discord.ButtonStyle.danger, custom_id="admin_gacha_verify_btn")
     async def verify(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ 権限なし", ephemeral=True)
         await interaction.response.edit_message(content=f"✅ 承認完了！", view=None)
-        await interaction.channel.send(content=f"🎰 {self.user.mention} さん、どうぞ！", view=GachaExecuteView(self.bot, self.count, self.user))
+        await interaction.channel.send(content=f"🎰 {self.user.mention if self.user else 'ユーザー'} さん、どうぞ！", view=GachaExecuteView(self.bot, self.count, self.user))
 
-# --- PayPay申請モーダル ---
+# --- 4. PayPay申請モーダル (変更なし) ---
 class GachaPayPayModal(Modal):
     def __init__(self, bot, price, count):
         super().__init__(title=f"ガチャチケット購入 ({price}円)")
@@ -150,7 +127,39 @@ class GachaPayPayModal(Modal):
         await channel.send(embed=embed, view=AdminGachaVerifyView(self.bot, self.count, interaction.user))
         await interaction.followup.send(f"✅ 申請完了。 {channel.mention} へどうぞ。", ephemeral=True)
 
-        
+# --- 5. メインメニュー用View ---
+class GachaMenuView(View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+        # PayPayボタン
+        paypay_data = [(500, 5), (800, 10)]
+        for p, c in paypay_data:
+            btn = Button(label=f"💴 PayPay {c}連({p}円)", style=discord.ButtonStyle.success, custom_id=f"gacha_paypay_{p}")
+            btn.callback = self.make_paypay_callback(p, c)
+            self.add_item(btn)
+
+        # コインボタン
+        coin_data = [(600, 5), (1000, 10)]
+        for cost, c in coin_data:
+            btn = Button(label=f"🪙 コイン {c}連({cost}枚)", style=discord.ButtonStyle.primary, custom_id=f"gacha_coin_{cost}")
+            btn.callback = self.make_coin_callback(cost, c)
+            self.add_item(btn)
+
+    def make_paypay_callback(self, p, c):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.send_modal(GachaPayPayModal(self.bot, p, c))
+        return callback
+
+    def make_coin_callback(self, cost, c):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.send_message(
+                f"📢 コイン **{cost}枚** を消費して **{c}連ガチャ** を回します。本当によろしいですか？", 
+                view=CoinGachaConfirmView(self.bot, cost, c), 
+                ephemeral=True
+            )
+        return callback
 
 # --- メインメニューCog ---
 class Gacha(commands.Cog):
@@ -159,35 +168,10 @@ class Gacha(commands.Cog):
 
     @app_commands.command(name="gacha", description="ガチャメニューを表示します")
     async def gacha_menu(self, interaction: discord.Interaction):
-        # 1. 爆速で初期レスポンスを返す（一番大事）
         await interaction.response.send_message("⌛ ガチャメニューを読み込んでいます...", ephemeral=False)
         
-        # 2. その後に中身を構築する
         embed = discord.Embed(title="🎰 ガチャメニュー", description="PayPayまたはコインで回せます！", color=0x3498DB)
-        view = View(timeout=None)
-        
-        # PayPayボタン
-        for p, c in [(500, 5), (800, 10)]:
-            btn = Button(label=f"💴 PayPay {c}連({p}円)", style=discord.ButtonStyle.success)
-            btn.callback = (lambda p=p, c=c: (lambda i: i.response.send_modal(GachaPayPayModal(self.bot, p, c))))()
-            view.add_item(btn)
-
-        # コインボタン
-        for cost, c in [(600, 5), (1000, 10)]:
-            btn = Button(label=f"🪙 コイン {c}連({cost}枚)", style=discord.ButtonStyle.primary)
-            btn.callback = (lambda cost=cost, c=c: (lambda i: i.response.send_message(
-                f"📢 コイン **{cost}枚** を消費して **{c}連ガチャ** を回します。本当によろしいですか？", 
-                view=CoinGachaConfirmView(self.bot, cost, c), 
-                ephemeral=True
-            )))()
-            view.add_item(btn)
-
-        # 3. 構築したメニューで最初のメッセージを上書きする
-        await interaction.edit_original_response(content=None, embed=embed, view=view)
-
-        
-
-        
+        await interaction.edit_original_response(content=None, embed=embed, view=GachaMenuView(self.bot))
 
 async def setup(bot):
     await bot.add_cog(Gacha(bot))

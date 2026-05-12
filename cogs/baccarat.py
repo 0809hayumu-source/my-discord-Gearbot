@@ -3,7 +3,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 import asyncio
 import random
-from utils import process_rank_system  # ランクシステムを読み込み
+from utils import process_rank_system
 
 # --- 設定 ---
 LOG_CHANNEL_ID = 1502653911511597076
@@ -42,7 +42,6 @@ class BaccaratGameLogic:
         p_full_hand = [get_card(), get_card()]
         b_full_hand = [get_card(), get_card()]
         
-        # イカサマ処理
         if not self.can_win:
             p_s = (p_full_hand[0]['points'] + p_full_hand[1]['points']) % 10
             b_s = (b_full_hand[0]['points'] + b_full_hand[1]['points']) % 10
@@ -67,7 +66,6 @@ class BaccaratGameLogic:
             emb.add_field(name=f"🔵 PLAYER [{'❓' if '🎴' in p_display else NUM_EMOJI[p_score]}]", value=p_str, inline=False)
             emb.add_field(name=f"🔴 BANKER [{'❓' if '🎴' in b_display else NUM_EMOJI[b_score]}]", value=b_str, inline=False)
             
-            # ランクアップ情報があれば結合
             if rank_embed:
                 emb.add_field(name="🛡️ ランク進捗", value=rank_embed.description, inline=False)
                 
@@ -76,7 +74,6 @@ class BaccaratGameLogic:
 
         await interaction.response.send_message(embed=await make_embed(), ephemeral=True)
 
-        # 演出
         for i in range(2):
             await asyncio.sleep(0.8)
             p_display[i] = p_full_hand[i]['display']
@@ -104,7 +101,6 @@ class BaccaratGameLogic:
                 b_display[-1] = card['display']
             await interaction.edit_original_response(embed=await make_embed())
 
-        # 最終判定
         p_fin = calculate_baccarat_score(p_full_hand)
         b_fin = calculate_baccarat_score(b_full_hand)
         winner = "PLAYER" if p_fin > b_fin else ("BANKER" if b_fin > p_fin else "TIE")
@@ -114,14 +110,11 @@ class BaccaratGameLogic:
         payout = int(self.bet * win_table[self.choice]) if is_win else 0
 
         # --- ランクシステム連動 ---
-        # 消費コインとしてベット額を渡し、払い戻しがある場合は加算する
         rank_emb = await process_rank_system(self.bot, self.user.id, self.bet)
         
-        # 当たった場合は払い戻し（process_rank_systemでコインは減っているので、増やす分だけrpcを呼ぶ）
         if is_win:
             self.bot.supabase.rpc('update_user_stats', {'u_id': str(self.user.id), 'coin_change': payout}).execute()
 
-        # 最終結果表示
         res_color = 0x00ff00 if is_win else 0xff0000
         final_emb = await make_embed("終了", res_color, rank_embed=rank_emb)
         res_msg = f"## {'✨ 的中！' if is_win else '💀 残念...'}\n勝者: **{winner}**\n払い戻し: {payout:,}枚"
@@ -136,48 +129,51 @@ class BaccaratGameLogic:
             profit = payout - self.bet
             await chan.send(f"📝 **バカラログ**: {self.user.mention} | 予想:{self.choice} | 結果:{winner} | 損益:{profit:+,}")
 
-class Baccarat(commands.Cog):
-    def __init__(self, bot):
-        self.bot, self.user_bets = bot, {}
-
-    @app_commands.command(name="baccarat", description="バカラパネルを表示")
-    async def baccarat(self, i: discord.Interaction):
-        emb = discord.Embed(title="🎰 ぎあカジノ・バカラ", description="PLAYERかBANKERかTIEを予想してください。", color=0x0000ff)
-        await i.response.send_message(embed=emb, view=BaccaratMainView(self.bot, self))
-
+# --- パネル部分 (永続化) ---
 class BaccaratMainView(ui.View):
-    def __init__(self, bot, cog):
+    def __init__(self, bot):
         super().__init__(timeout=None)
-        self.bot, self.cog = bot, cog
+        self.bot = bot
+        self.user_bets = {}
 
     async def start_game(self, i, choice):
-        bet = self.cog.user_bets.get(i.user.id, 100)
+        bet = self.user_bets.get(i.user.id, 100)
         res = self.bot.supabase.table("user_coins").select("coin_count").eq("user_id", str(i.user.id)).execute()
         if not res.data or res.data[0]['coin_count'] < bet:
             return await i.response.send_message("❌ コイン不足", ephemeral=True)
         
-        # ここではコインを引かず、process_rank_system内で消費（引き算）させる
         game = BaccaratGameLogic(self.bot, i.user, bet, choice)
         await game.check_rigged()
         await game.play(i)
 
-    @ui.button(label="金額設定", style=discord.ButtonStyle.secondary, emoji="⌨️")
+    @ui.button(label="金額設定", style=discord.ButtonStyle.secondary, emoji="⌨️", custom_id="bac_set_bet")
     async def set_bet(self, i, b):
         modal = ui.Modal(title="ベット額")
         amt = ui.TextInput(label="枚数", default="100")
         modal.add_item(amt)
         async def cb(it):
-            self.cog.user_bets[it.user.id] = int(amt.value)
+            self.user_bets[it.user.id] = int(amt.value)
             await it.response.send_message(f"✅ {amt.value}枚に設定", ephemeral=True)
         modal.on_submit = cb
         await i.response.send_modal(modal)
 
-    @ui.button(label="PLAYER", style=discord.ButtonStyle.primary)
+    @ui.button(label="PLAYER", style=discord.ButtonStyle.primary, custom_id="bac_player")
     async def p(self, i, b): await self.start_game(i, "PLAYER")
-    @ui.button(label="BANKER", style=discord.ButtonStyle.danger)
+    
+    @ui.button(label="BANKER", style=discord.ButtonStyle.danger, custom_id="bac_banker")
     async def b(self, i, b): await self.start_game(i, "BANKER")
-    @ui.button(label="TIE", style=discord.ButtonStyle.success)
+    
+    @ui.button(label="TIE", style=discord.ButtonStyle.success, custom_id="bac_tie")
     async def t(self, i, b): await self.start_game(i, "TIE")
+
+class Baccarat(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @app_commands.command(name="baccarat", description="バカラパネルを表示")
+    async def baccarat(self, i: discord.Interaction):
+        emb = discord.Embed(title="🎰 ぎあカジノ・バカラ", description="PLAYERかBANKERかTIEを予想してください。", color=0x0000ff)
+        await i.response.send_message(embed=emb, view=BaccaratMainView(self.bot))
 
 async def setup(bot):
     await bot.add_cog(Baccarat(bot))

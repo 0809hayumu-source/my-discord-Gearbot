@@ -48,7 +48,7 @@ class VerifyView(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @ui.button(label="ルールに同意して申請する", style=discord.ButtonStyle.primary, emoji="📝", custom_id="agree_button")
+    @ui.button(label="同意して申請する", style=discord.ButtonStyle.primary, emoji="📝", custom_id="agree_button")
     async def agree(self, interaction: discord.Interaction, button: ui.Button):
         guild = interaction.guild
         user = interaction.user
