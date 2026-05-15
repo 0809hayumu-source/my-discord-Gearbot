@@ -112,6 +112,25 @@ class MyBot(commands.Bot):
                         print(f"📦 Cog読み込み完了: {filename}")
                 except Exception as e:
                     print(f"❌ {filename} の読み込みに失敗しました: {e}")
+                    
+        async def setup_hook(self):
+        # --- (他の登録は省略) ---
+
+        # 配布パネルの永続化登録
+                try:
+                    from cogs.gift import GiftView
+            # 登録時に amount を渡す必要があります（再起動後の判定用）
+                    self.add_view(GiftView(self, amount=0)) 
+                    print("✅ 配布ボタンを復旧")
+                except Exception as e: 
+                    print(f"⚠️ 配布ボタンの登録失敗: {e}")
+
+        # --- (Cogのロード) ---
+        
+        # スラッシュコマンドを確実に同期させる
+        guild = discord.Object(id=GUILD_ID)
+        self.tree.copy_global_to(guild=guild)
+        await self.tree.sync(guild=guild)
 
         # --- 3. スラッシュコマンドの同期 ---
         guild = discord.Object(id=GUILD_ID)

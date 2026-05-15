@@ -4,6 +4,7 @@ from discord.ext import commands
 import asyncio
 import random
 from utils import process_rank_system
+import datetime
 
 # --- 設定 ---
 LOG_CHANNEL_ID = 1502678682752258049
@@ -115,12 +116,17 @@ class BJGameView(ui.View):
         
         profit = payout - self.bet
         adj_status = "OFF" if self.can_win else "ON"
+
+        # --- 日本時間(JST)の取得 ---
+        # utcnow() に 9時間を足して日本時間に変換
+        jst_now = discord.utils.utcnow() + datetime.timedelta(hours=9)
+        time_str = jst_now.strftime('%H:%M')
         
         log_emb = discord.Embed(title="📝 BJ記録", color=0x2b2d31)
         log_emb.description = (
             f"**ユーザー**　**結果**　**損益**\n"
             f"{self.user.mention}　{res}　{profit:+,}枚\n\n"
-            f"調整: {adj_status} ・ 今日 {discord.utils.utcnow().strftime('%H:%M')}"
+            f"調整: {adj_status} ・ 今日 {time_str}"
         )
         await chan.send(embed=log_emb)
 
