@@ -2,6 +2,7 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands
 import asyncio
+import datetime
 
 # --- 設定 ---
 AGREED_ROLE_ID = 1503334701446725632  # 「同意済み」のロールID

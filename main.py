@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import os
 from supabase import create_client, Client
+import datetime
 
 # --- 設定項目 ---
 TOKEN = os.getenv("TOKEN") or "MTM1ODAyNDA2MjkxMTM4NTczMg.GzoW9w.8p4tjwMP_tik-qmCICmczFyoMnhgKbP2ssGehI"

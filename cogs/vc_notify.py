@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+import datetime
 
 # --- [設定] ---
 MONITOR_VC_ID = 1495342014382739556      # 監視するボイスチャンネルID

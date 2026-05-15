@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord.ui import View, Button
 import random
 import asyncio
+import datetime
 from utils import process_rank_system
 
 # --- ガチャ実行View ---

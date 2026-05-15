@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from utils import process_rank_system
+import datetime
 
 class RankCog(commands.Cog):
     def __init__(self, bot):

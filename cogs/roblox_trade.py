@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import Modal, TextInput, View, Button
 import asyncio
+import datetime
 
 # --- [設定] 通知を送りたい特定の個人メンション ---
 ADMIN_USER_MENTIONS = "<@719461059248783401> <@718428067340615730>"

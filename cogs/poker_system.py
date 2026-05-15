@@ -3,7 +3,7 @@ from discord import app_commands, ui
 from discord.ext import commands
 import random
 from itertools import combinations
-
+import datetime
 # --- 設定 ---
 LOG_CHANNEL_ID = 1502678682752258049
 SUITS = ['♠️', '♥️', '♣️', '♦️']

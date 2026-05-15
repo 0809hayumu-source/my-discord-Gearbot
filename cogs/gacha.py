@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord.ui import Modal, TextInput, View, Button
 import random
 from utils import process_rank_system
+import datetime
 
 # --- ガチャ実行処理 (中身は変更なし) ---
 async def execute_gacha_logic(bot, target, count, user, current_total_tickets, is_coin=False):

@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from discord.ui import Modal, TextInput, View, Button
+import datetime
 
 # --- 管理者承認View ---
 class AdminVendingVerifyView(View):

@@ -1,4 +1,5 @@
 import discord
+import datetime
 
 # 特製：最凶ランク設定
 RANK_SETTINGS = {

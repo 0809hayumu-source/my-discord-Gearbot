@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands, ui
 from discord.ext import commands
+import datetime
 # utils.py から process_rank_system をインポート
 try:
     from utils import process_rank_system
