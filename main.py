@@ -93,6 +93,13 @@ class MyBot(commands.Bot):
             self.add_view(BaccaratMainView(self))
             print("✅ バカラパネルのボタンを復旧")
         except Exception as e: print(f"⚠️ バカラViewの登録失敗: {e}")
+        
+        # マルチブラックジャックパネルの永続化
+        try:
+            from cogs.blackjack_multi import BJPanelView
+            self.add_view(BJPanelView(self))
+            print("✅ マルチBJパネルのボタンを復旧")
+        except Exception as e: print(f"⚠️ マルチBJViewの登録失敗: {e}")
 
         # オークション申請 (追加分)
         try:
