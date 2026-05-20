@@ -132,6 +132,14 @@ class MyBot(commands.Bot):
                     print("✅ 配布ボタンを復旧")
                 except Exception as e: 
                     print(f"⚠️ 配布ボタンの登録失敗: {e}")
+        # チケットシステムパネルと閉じるボタンの永続化
+        try:
+            from cogs.ticket_system import PayTicketPanelView, TicketCloseView
+            self.add_view(PayTicketPanelView(self))
+            self.add_view(TicketCloseView(self))  # 🔒 ここを TicketCloseView(self) に変更！
+            print("✅ チケットシステム（発行・クローズ）を復旧")
+        except Exception as e: 
+            print(f"⚠️ チケットViewの登録失敗: {e}")
 
         # --- (Cogのロード) ---
         

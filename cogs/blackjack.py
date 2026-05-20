@@ -27,7 +27,7 @@ def calculate_score(hand):
         ace_count -= 1
     return score
 
-# --- ゲーム進行中View (これは一時的なのでcustom_id不要) ---
+# --- ゲーム進行中View ---
 class BJGameView(ui.View):
     def __init__(self, bot, user, bet, rank_emb=None):
         super().__init__(timeout=120)
@@ -73,25 +73,43 @@ class BJGameView(ui.View):
 
     @ui.button(label="スタンド", style=discord.ButtonStyle.success, emoji="✋")
     async def stand(self, i, b):
+        self.clear_items()
+        await i.response.edit_message(embed=self.create_embed(show=False, status="ディーラーの思考中..."), view=None)
+        
+        await asyncio.sleep(1.2)
+        await i.edit_original_response(embed=self.create_embed(show=True, status="ディーラーのターン..."))
+
+        # ディーラーは17点以上になるまで引き続ける（本来の動き）
         while calculate_score(self.dealer_hand) < 17:
+            await asyncio.sleep(1.5)
             self.dealer_hand.append(get_card())
+            await i.edit_original_response(embed=self.create_embed(show=True, status="ディーラーがカードを引いています..."))
         
         p_s = calculate_score(self.player_hand)
         d_s = calculate_score(self.dealer_hand)
         
-        if not self.can_win and (d_s > 21 or p_s > d_s):
-            final_d_score = min(p_s + 1, 21)
+        # 🛠️ 回収モード（イカサマ）の処理を修正
+        if not self.can_win:
+            # プレイヤーが21未満、かつ（ディーラーがバーストした、またはプレイヤーの方が強い）場合
+            if p_s < 21 and (d_s > 21 or p_s > d_s):
+                d_s = p_s + 1  # ディーラーのスコアをプレイヤーより1点高くして勝たせる
+                self.dealer_hand = [{"display": "🃏調整", "val": "X", "points": d_s}]
+            # プレイヤーがちょうど21の場合は、ディーラーが元々21じゃない限りプレイヤーの勝ちにする（バースト引き分けを防ぐ）
+
+        # 🛠️ 勝敗判定ロジックをシンプルかつ確実なものに変更
+        if d_s > 21:
+            res = "WIN"   # ディーラーがバーストしたらプレイヤーの勝ち
+        elif p_s > d_s:
+            res = "WIN"   # プレイヤーの方が高ければ勝ち
+        elif p_s < d_s:
+            res = "LOSE"  # ディーラーの方が高ければ負け
         else:
-            final_d_score = d_s
+            res = "PUSH"  # 同点なら引き分け
 
-        if final_d_score > 21: res = "WIN"
-        elif p_s > final_d_score: res = "WIN"
-        elif p_s < final_d_score: res = "LOSE"
-        else: res = "PUSH"
+        await asyncio.sleep(1.0)
+        await self.finish_edit(i, res)
 
-        await self.finish(i, res, override_d_score=final_d_score)
-
-    async def finish(self, i, res, override_d_score=None):
+    async def finish_edit(self, i, res):
         self.stop()
         payout = int(self.bet * 2) if res == "WIN" else (int(self.bet) if res == "PUSH" else 0)
         
@@ -107,6 +125,20 @@ class BJGameView(ui.View):
         emb.color = color
         emb.description = f"## {msg}\n払い戻し: {payout:,}枚"
         
+        await i.edit_original_response(embed=emb, view=None)
+
+    async def finish(self, i, res):
+        self.stop()
+        payout = 0
+        await self.send_log(res, payout)
+        
+        color = 0xFF0000
+        msg = "💥 バースト！"
+        
+        emb = self.create_embed(show=True, status="ゲーム終了")
+        emb.color = color
+        emb.description = f"## {msg}\n払い戻し: {payout:,}枚"
+        
         await i.response.edit_message(embed=emb, view=None)
 
     async def send_log(self, res, payout):
@@ -117,8 +149,6 @@ class BJGameView(ui.View):
         profit = payout - self.bet
         adj_status = "OFF" if self.can_win else "ON"
 
-        # --- 日本時間(JST)の取得 ---
-        # utcnow() に 9時間を足して日本時間に変換
         jst_now = discord.utils.utcnow() + datetime.timedelta(hours=9)
         time_str = jst_now.strftime('%H:%M')
         
@@ -135,7 +165,6 @@ class BJMainView(ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
-        # ユーザーごとのBET額を一時的に保持
         self.user_bets = {}
 
     @ui.button(label="金額設定", style=discord.ButtonStyle.secondary, emoji="⌨️", custom_id="bj_set_bet")
@@ -148,7 +177,6 @@ class BJMainView(ui.View):
             if not amount_input.value.isdigit(): 
                 return await inter.response.send_message("数字を入れてね", ephemeral=True)
             
-            # Cog側の辞書に保存 (ボット再起動でリセットされるが、パネル自体は生き残る)
             self.user_bets[inter.user.id] = int(amount_input.value)
             await inter.response.send_message(f"✅ {int(amount_input.value):,}枚に設定しました。", ephemeral=True)
             
@@ -157,20 +185,20 @@ class BJMainView(ui.View):
 
     @ui.button(label="勝負開始！", style=discord.ButtonStyle.danger, emoji="🔥", custom_id="bj_start_game")
     async def start(self, i, b):
+        await i.response.defer(ephemeral=True)
+
         bet = self.user_bets.get(i.user.id, 100)
         
-        # 1. 所持コインチェック
         res = self.bot.supabase.table("user_coins").select("coin_count").eq("user_id", str(i.user.id)).execute()
         if not res.data or res.data[0]['coin_count'] < bet:
-            return await i.response.send_message("❌ コインが足りません", ephemeral=True)
+            return await i.followup.send("❌ コインが足りません", ephemeral=True)
         
-        # 2. ランク処理
         rank_emb = await process_rank_system(self.bot, i.user.id, bet)
         
-        # 3. ゲーム開始
         gv = BJGameView(self.bot, i.user, bet, rank_emb=rank_emb)
         await gv.check_rigged()
-        await i.response.send_message(embed=gv.create_embed(), view=gv, ephemeral=True)
+        
+        await i.followup.send(embed=gv.create_embed(), view=gv, ephemeral=True)
 
 class BlackjackNewGia(commands.Cog):
     def __init__(self, bot):
@@ -178,6 +206,8 @@ class BlackjackNewGia(commands.Cog):
 
     @app_commands.command(name="bj", description="ブラックジャックを開始します")
     async def bj(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
         emb = discord.Embed(
             title="🎰 ぎあカジノ・ブラックジャック",
             description=(
@@ -190,7 +220,7 @@ class BlackjackNewGia(commands.Cog):
             ),
             color=0x00ff00
         )
-        await interaction.response.send_message(embed=emb, view=BJMainView(self.bot))
+        await interaction.followup.send(embed=emb, view=BJMainView(self.bot), ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(BlackjackNewGia(bot))
