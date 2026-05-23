@@ -32,8 +32,8 @@ class RobloxTradeModal(Modal):
         embed.add_field(name="希望額", value=f"{self.hope_price.value} コイン", inline=False)
         embed.set_footer(text="この後に「証拠写真」をこのチャンネルにアップロードしてください。")
 
-        # 承認用Viewを作成（申請者と金額を渡す）
-        view = RobloxAdminVerifyView(self.bot, interaction.user, self.hope_price.value)
+        # 💡 再起動してもデータを見失わないように custom_id へ「申請者ID」と「金額」を埋め込む
+        view = RobloxAdminVerifyView(self.bot, interaction.user.id, self.hope_price.value)
         
         content = (
             "✅ 入力が完了しました！\n"
@@ -41,62 +41,94 @@ class RobloxTradeModal(Modal):
             "- 【重要】この後に必ず「証拠となる写真」をここにアップロードしてください！\n"
             "```\n"
             f"（写真を送ると {ADMIN_USER_MENTIONS} に通知がいきます）"
-            )
+        )
         await interaction.response.send_message(content=content, embed=embed, view=view)
 
-# --- 2. 管理者承認ボタン ---
+
+# --- 2. 管理者承認ボタン（永続化対応版） ---
 class RobloxAdminVerifyView(View):
-    def __init__(self, bot, applicant, amount):
+    def __init__(self, bot, applicant_id: int, amount: str):
         super().__init__(timeout=None)
         self.bot = bot
-        self.applicant = applicant
-        self.amount = amount
+        self.applicant_id = applicant_id
+        self.amount = str(amount).replace(",", "")
+        
+        self.clear_items()
+        # 💡 custom_id に申請者と金額の情報を合体させて埋め込む
+        self.add_item(Button(
+            label="上記「買取希望額」で承認（在庫から付与）", 
+            style=discord.ButtonStyle.success,
+            custom_id=f"rt_approve_{applicant_id}_{self.amount}"
+        ))
 
-    @discord.ui.button(label="上記「買取希望額」で承認（在庫から付与）", style=discord.ButtonStyle.success)
-    async def approve_step1(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        custom_id = interaction.data.get("custom_id", "")
+        if not custom_id.startswith("rt_approve_"):
+            return False
+
         # 権限チェック
         if not any(r.id == ALLOWED_ROLE_ID for r in interaction.user.roles):
-            return await interaction.response.send_message("❌ 権限がありません（「コイン付与可」ロールが必要です）。", ephemeral=True)
+            await interaction.response.send_message("❌ 権限がありません（「コイン付与可」ロールが必要です）。", ephemeral=True)
+            return False
+
+        # custom_id からデータを復元
+        parts = custom_id.replace("rt_approve_", "").split("_")
+        target_applicant_id = int(parts[0])
+        val = int(parts[1])
 
         confirm_view = View()
-        confirm_btn = Button(label="本当によろしいですか？（実行して閉じる）", style=discord.ButtonStyle.danger)
+        # 💡 最終確認ボタンにも同じ情報を引き継ぐ
+        confirm_btn = Button(
+            label="本当によろしいですか？（実行して閉じる）", 
+            style=discord.ButtonStyle.danger,
+            custom_id=f"rt_confirm_{target_applicant_id}_{val}"
+        )
         
         async def confirm_callback(i: discord.Interaction):
+            await i.response.defer()
             try:
-                val = int(self.amount.replace(",", "")) # カンマが入っていても数値化できるように
-                
                 # 管理者の残高チェック
                 res = self.bot.supabase.table("user_coins").select("coin_count").eq("user_id", str(i.user.id)).execute()
                 if not res.data or res.data[0]['coin_count'] < val:
-                    return await i.response.send_message("❌ あなたの在庫コインが足りません。", ephemeral=True)
+                    return await i.followup.send("❌ あなたの在庫コインが足りません。", ephemeral=True)
 
                 # 1. 申請者へ付与
-                self.bot.add_data(self.applicant.id, val)
+                self.bot.add_data(target_applicant_id, val)
+                
                 # 2. 管理者から減算
                 self.bot.supabase.table("user_coins").update({
                     "coin_count": res.data[0]['coin_count'] - val
                 }).eq("user_id", str(i.user.id)).execute()
 
-                await i.response.edit_message(content=f"✅ {val:,} 枚での買取を最終承認しました。5秒後にチャンネルを削除します。", view=None)
+                await i.edit_original_response(content=f"✅ {val:,} 枚での買取を最終承認しました。5秒後にチャンネルを削除します。", view=None)
                 
-                try: await self.applicant.send(f"🔔 買取完了！{val:,} 枚が付与されました。")
-                except: pass
+                # DM通知
+                try:
+                    applicant_user = self.bot.get_user(target_applicant_id) or await self.bot.fetch_user(target_applicant_id)
+                    if applicant_user:
+                        await applicant_user.send(f"🔔 買取完了！{val:,} 枚が付与されました。")
+                except: 
+                    pass
 
                 await asyncio.sleep(5)
                 await i.channel.delete()
-            except ValueError:
-                await i.response.send_message("❌ 希望額が正しい数字ではありません。", ephemeral=True)
             except Exception as e:
-                await i.response.send_message(f"❌ エラーが発生しました: {e}", ephemeral=True)
+                await i.followup.send(f"❌ エラーが発生しました: {e}", ephemeral=True)
 
         confirm_btn.callback = confirm_callback
         confirm_view.add_item(confirm_btn)
-        await interaction.response.send_message("⚠️ **最終確認：このままコインを付与してチケットを閉じても本当によろしいですか？**", view=confirm_view, ephemeral=True)
+        
+        await interaction.response.send_message(
+            "⚠️ **最終確認：このままコインを付与してチケットを閉じても本当によろしいですか？**", 
+            view=confirm_view, 
+            ephemeral=True
+        )
+        return True
 
-# --- 3. チケット発行パネル ---
+
+# --- 3. チケット発行パネル（永続化対応版） ---
 class RobloxTicketLaunchView(View):
     def __init__(self, bot):
-        # custom_id を設定することで、ボット再起動後もボタンが反応するようにする
         super().__init__(timeout=None)
         self.bot = bot
         self.category_id = 1499380530376999032
@@ -112,10 +144,10 @@ class RobloxTicketLaunchView(View):
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
         
-        # 特定の個人に閲覧権限を付与
         for user_id in [719461059248783401, 718428067340615730]:
             target = guild.get_member(user_id)
-            if target: overwrites[target] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            if target: 
+                overwrites[target] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
         channel = await guild.create_text_channel(
             name=f"買取-{interaction.user.display_name}",
@@ -125,26 +157,25 @@ class RobloxTicketLaunchView(View):
         
         await interaction.response.send_message(f"✅ {channel.mention} を作成しました。", ephemeral=True)
         
-        # チケットチャンネル内での入力ボタン
+        # 💡 custom_id を設定し、再起動されてもモーダルが確実に開くようにする
         form_view = View(timeout=None)
-        btn = Button(label="ここをタップして申請フォームを入力", style=discord.ButtonStyle.green, custom_id="roblox_form_open")
-        
-        # モーダルを開くコールバック
-        async def open_modal(i: discord.Interaction):
-            await i.response.send_modal(RobloxTradeModal(self.bot))
-            
-        btn.callback = open_modal
-        form_view.add_item(btn)
+        form_view.add_item(Button(
+            label="ここをタップして申請フォームを入力", 
+            style=discord.ButtonStyle.green, 
+            custom_id="roblox_form_open_btn"
+        ))
         
         await channel.send(f"{interaction.user.mention} さん、下のボタンから詳細を入力してください。", view=form_view)
+
 
 # --- 4. メインCog ---
 class RobloxTrade(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="roblox_panel", description="【管理者用】買取申請ボタンを設置します")
-    async def roblox_panel(self, interaction: discord.Interaction):
+    # 🛠️ 重複バグを避けるため、コマンド名を変更しました！
+    @app_commands.command(name="roblox_trade_panel", description="【管理者用】買取申請ボタンを設置します")
+    async def roblox_trade_panel(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
         
@@ -153,14 +184,28 @@ class RobloxTrade(commands.Cog):
             description="ロブロックスのアイテムやキャラの買取希望の方はこちら。\n下のボタンを押すと専用チャンネルが開きます。", 
             color=0x3498DB
         )
-        # 再起動後も動くようにViewを渡す
         await interaction.channel.send(embed=embed, view=RobloxTicketLaunchView(self.bot))
         await interaction.response.send_message("パネルを設置しました。", ephemeral=True)
 
+    # 💡 常駐View（ボタン）が再起動後も正常に動くようにBotへ仕込む処理
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # フォームを開くボタンの永続待機イベント
+        class GlobalFormOpenView(View):
+            def __init__(self, bot_instance):
+                super().__init__(timeout=None)
+                self.bot = bot_instance
+            @discord.ui.button(label="ここをタップして申請フォームを入力", style=discord.ButtonStyle.green, custom_id="roblox_form_open_btn")
+            async def open_modal(self, i: discord.Interaction, b: Button):
+                await i.response.send_modal(RobloxTradeModal(self.bot))
+
+        self.bot.add_view(GlobalFormOpenView(self.bot))
+        print("✅ ロブロイカサマ防止・買取常駐Viewの登録完了")
+
     @commands.Cog.listener()
     async def on_message(self, message):
-        if message.author.bot: return
-        # 買取チャンネルかつ画像が送られた場合
+        if message.author.bot: 
+            return
         if message.channel.name and message.channel.name.startswith("買取-"):
             if message.attachments:
                 await message.channel.send(f"📸 画像を確認しました！\n{ADMIN_USER_MENTIONS} さん、確認お願いします！")

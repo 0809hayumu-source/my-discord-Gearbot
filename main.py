@@ -1,8 +1,10 @@
 import discord
 from discord.ext import commands
-import os
+from discord.ui import View
+import os 
 from supabase import create_client, Client
 import datetime
+
 
 # --- 設定項目 ---
 TOKEN = os.getenv("TOKEN") or "MTM1ODAyNDA2MjkxMTM4NTczMg.GzoW9w.8p4tjwMP_tik-qmCICmczFyoMnhgKbP2ssGehI"
@@ -141,12 +143,50 @@ class MyBot(commands.Bot):
         except Exception as e: 
             print(f"⚠️ チケットViewの登録失敗: {e}")
 
-        # --- (Cogのロード) ---
-        
+            # ロブロックスチケットシステムの永続化
+        try:
+            # 💡 ここで名前が正確に一致しているか確認してね
+            from cogs.roblox_ticket import RobloxTicketPanelView, RobloxTicketCloseView
+            self.add_view(RobloxTicketPanelView(self))
+            self.add_view(RobloxTicketCloseView(self))
+            print("✅ ロブロックスチケットシステムを復旧")
+        except Exception as e: 
+            print(f"⚠️ ロブロチケットViewの登録失敗: {e}")
         # スラッシュコマンドを確実に同期させる
         guild = discord.Object(id=GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
+
+        # ポーカー常駐パネルの永続化
+        try:
+            from cogs.poker_system import PokerPanelLaunchView
+            self.add_view(PokerPanelLaunchView(self))
+            print("✅ ポーカー常駐パネルを復旧")
+        except Exception as e:
+            print(f"⚠️ ポーカーパネルViewの登録失敗: {e}")
+
+        # 🧪 テストユーザー募集パネルの永続化
+        try:
+            from cogs.test_user_recruitment import TestUserButtonView
+            self.add_view(TestUserButtonView())
+            print("✅ テストユーザーボタンを復旧")
+        except Exception as e:
+            print(f"⚠️ テストユーザーボタンViewの登録失敗: {e}")
+
+        # 🤝 仲介チケットパネルの永続化
+        try:
+            from cogs.mm_ticket import TicketLaunchView, TicketActionView, TicketCloseView
+            self.add_view(TicketLaunchView())
+            
+            # まとめて登録
+            dynamic_view = View(timeout=None)
+            dynamic_view.add_item(TicketActionView().children[0])
+            dynamic_view.add_item(TicketCloseView().children[0])
+            self.add_view(dynamic_view)
+            
+            print("✅ 仲介チケットパネル＆対応・閉じるボタンを復旧")
+        except Exception as e:
+            print(f"⚠️ 仲介チケットViewの登録失敗: {e}")
 
         # --- 3. スラッシュコマンドの同期 ---
         guild = discord.Object(id=GUILD_ID)
