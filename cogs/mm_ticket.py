@@ -25,14 +25,6 @@ class TicketInviteModal(Modal, title="🤝 取引相手の招待と詳細入力"
         max_length=100,
         required=True
     )
-    details_input = TextInput(
-        label="取引したい内容（ゲーム名やアイテム名など）",
-        placeholder="例: 〇〇の垢と△△のコードの交換を希望します。",
-        style=discord.TextStyle.paragraph,
-        min_length=5,
-        max_length=1000,
-        required=True
-    )
 async def on_submit(self, i: discord.Interaction):
         try:
             await i.response.defer(ephemeral=True)
