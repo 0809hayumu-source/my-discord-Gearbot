@@ -17,7 +17,7 @@ MENTION_ADMIN_ID = 719461059248783401          # 🔔 メンションありの�
 
 
 # --- 📝 取引相手と内容を入力するモーダル窓 ---
-class TicketInviteModal(Modal, title="🤝 取引相手の招待と詳細入力"):
+class TicketInviteModal(Modal, title="🤝 取引相手の招待"):
     target_input = TextInput(
         label="取引相手のユーザーID または メンション",
         placeholder="例: 719461059248783401 または @ユーザー名",
@@ -25,12 +25,8 @@ class TicketInviteModal(Modal, title="🤝 取引相手の招待と詳細入力"
         max_length=100,
         required=True
     )
-async def on_submit(self, i: discord.Interaction):
-        try:
-            await i.response.defer(ephemeral=True)
-        except discord.InteractionResponded:
-            pass
 
+    async def on_submit(self, i: discord.Interaction):
         guild = i.guild
         channel = i.channel
         raw_target = self.target_input.value.strip()
@@ -44,15 +40,15 @@ async def on_submit(self, i: discord.Interaction):
             if id_only_match:
                 target_id = int(id_only_match.group())
             else:
-                return await i.followup.send("❌ 正しいメンション（@ユーザー名）またはユーザーIDを入力してください。", ephemeral=True)
+                return await i.response.send_message("❌ 正しいメンション（@ユーザー名）またはユーザーIDを入力してください。", ephemeral=True)
         
         # --- メンバー取得と検証 ---
         target_member = guild.get_member(target_id)
         if not target_member:
-            return await i.followup.send("❌ サーバー内に指定されたユーザーが見つかりませんでした。（Botがメンバー情報を取得できていない可能性があります）", ephemeral=True)
+            return await i.response.send_message("❌ サーバー内に指定されたユーザーが見つかりませんでした。", ephemeral=True)
 
         if target_member.id == i.user.id:
-            return await i.followup.send("❌ 自分自身を取引相手として招待することはできません。", ephemeral=True)
+            return await i.response.send_message("❌ 自分自身を取引相手として招待することはできません。", ephemeral=True)
 
         # --- 権限付与と通知 ---
         await channel.set_permissions(
@@ -63,16 +59,17 @@ async def on_submit(self, i: discord.Interaction):
         )
 
         info_emb = discord.Embed(
-            title="📥 取引情報が入力されました",
+            title="📥 取引相手の招待が完了しました",
             color=0x2ecc71,
             timestamp=datetime.datetime.now()
         )
         info_emb.add_field(name="👤 招待された取引相手", value=target_member.mention, inline=False)
-        info_emb.add_field(name="📝 取引内容・詳細", value=self.details_input.value, inline=False)
         info_emb.set_footer(text=f"設定者: {i.user.display_name}")
 
         await channel.send(content=f"➕ {i.user.mention} が取引相手として {target_member.mention} を招待しました！", embed=info_emb)
-        await i.followup.send(f"✅ {target_member.display_name} を招待したよ！", ephemeral=True)
+        await i.response.send_message(f"✅ {target_member.display_name} を招待したよ！", ephemeral=True)
+
+
 # --- 🎮 統合型View（競合を徹底排除したロジック） ---
 class TicketCombinedControlView(View):
     def __init__(self, show_invite: bool = False):
@@ -86,13 +83,7 @@ class TicketCombinedControlView(View):
     # 🟢 ボタン1: 取引相手を招待する
     @discord.ui.button(label="🟢 取引相手を招待する", style=discord.ButtonStyle.success, emoji="➕", custom_id="mm_ticket_invite")
     async def invite_partner(self, i: discord.Interaction, b: Button):
-        # ⚠️ 裏で勝手にdeferされている状況では、モーダルは絶対に開けません。
-        # そのため、一度 response.defer() を回避して直接開くか、ダメなら別メッセージでモーダルを要求します
-        try:
-            await i.response.send_modal(TicketInviteModal())
-        except discord.InteractionResponded:
-            # 万が一先回りされていたら、個別メッセージで案内
-            await i.followup.send("⚠️ 処理の競合が発生しました。もう一度ボタンを押すか、少し時間を置いて試してください。", ephemeral=True)
+        await i.response.send_modal(TicketInviteModal())
 
     # ✋ ボタン2: 私が対応します
     @discord.ui.button(label="✋ 私が対応します", style=discord.ButtonStyle.success, emoji="🤝", custom_id="mm_ticket_claim")
@@ -116,7 +107,6 @@ class TicketCombinedControlView(View):
         new_view.children[1].style = b.style
         new_view.children[1].disabled = True
 
-        # 💡 i.response.edit_message を使わず、メッセージオブジェクトから直接編集することで40060を絶対回避！
         await i.message.edit(view=new_view)
         
         # 応答の辻褄を合わせるためにdeferを投げておく（エラーは無視）
@@ -180,9 +170,13 @@ class TicketLaunchView(View):
 
     @discord.ui.button(label="🤝 仲介を依頼する", style=discord.ButtonStyle.primary, emoji="📩", custom_id="mm_ticket_open")
     async def open_ticket(self, i: discord.Interaction, b: Button):
-        # 💡 先回りに備えてあらかじめ受けておく
-        try: await i.response.defer(ephemeral=True)
-        except: pass
+        # 💡 deferすら行わず、エラーが出ても無視する「例外処理」のみに絞ります
+        try:
+            # 既に何らかの応答が完了している場合はこれをスキップ
+            if not i.response.is_done():
+                await i.response.defer(ephemeral=True)
+        except Exception:
+            pass
 
         guild = i.guild
         member = i.user
@@ -243,15 +237,12 @@ class TicketLaunchView(View):
                 "**【仲介スタッフへのお願い】**\n"
                 "対応を開始する際は、下の **「私が対応します」** ボタンを必ず押してください。\n\n"
                 "**【依頼者へのお願い】**\n"
-                "仲介スタッフが対応ボタンを押すと、ここに **「🟢 取引相手を招待する」** ボタンが出現します！\n"
-                "ボタンが出たら、画面の指示に従って取引相手の招待と内容を入力してください。"
+                "仲介スタッフが対応ボタンを押すと、ここに **「🟢 取引相手を招待する」** ボタンが出現します！"
             ),
             color=0x3498db
         )
 
         await ticket_channel.send(content=f"🔔 {mention_str}", embed=emb, view=TicketCombinedControlView(show_invite=False))
-        
-        # 💡 i.response.send_message ではなく i.followup.send を使うことで絶対安全に作成通知！
         await i.followup.send(f"✅ チケットを作成しました！こちらへどうぞ ➡ {ticket_channel.mention}", ephemeral=True)
 
 
@@ -264,9 +255,7 @@ class MiddlemanTicket(commands.Cog):
     @app_commands.command(name="setup_ticket", description="【管理者専用】指定チャンネルに仲介チケットのパネルを設置します")
     @commands.has_permissions(administrator=True)
     async def setup_ticket(self, interaction: discord.Interaction):
-        # 💡 先回りに備えてあらかじめ受けておく
-        try: await interaction.response.defer(ephemeral=True)
-        except: pass
+        await interaction.response.defer(ephemeral=True)
 
         target_channel = self.bot.get_channel(TICKET_PANEL_CHANNEL_ID)
         if not target_channel:
@@ -277,9 +266,7 @@ class MiddlemanTicket(commands.Cog):
             description=(
                 "ユーザー同士の安全な取引をサポートするために仲介を行います！\n\n"
                 "📌 **ご利用方法**\n"
-                "下の **「仲介を依頼する」** ボタンを押すると、あなたと仲介人だけが見られる専用の秘密チャンネルが新しく作成されます。\n\n"
-                "⚠️ **注意**\n"
-                "いたずらでのチケット作成はお控えください。"
+                "下の **「仲介を依頼する」** ボタンを押すると、あなたと仲介人だけが見られる専用の秘密チャンネルが新しく作成されます。"
             ),
             color=0x9b59b6
         )
