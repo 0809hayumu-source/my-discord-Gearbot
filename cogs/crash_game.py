@@ -5,6 +5,7 @@ from discord.ui import Button, View
 import random
 import asyncio
 import datetime
+from utils import process_rank_system
 
 # --- 設定 ---
 LOG_CHANNEL_ID = 1509036075010752734            # 🛑 ログチャンネルID
@@ -38,14 +39,16 @@ class CrashBetModal(discord.ui.Modal, title="💸 クラッシュにベット"):
 
     async def on_submit(self, i: discord.Interaction):
         if self.view.game_phase != "BETTING":
-            return await i.response.send_message("❌ ベット受付時間を過ぎています！次のラウンドをお待ちください。", ephemeral=True)
+            return await i.response.send_message("❌ ベット受付時間を過ぎています！", ephemeral=True)
         
         if any(p.user.id == i.user.id for p in self.view.players):
-            return await i.response.send_message("❌ 既にこのラウンドにベットしています。", ephemeral=True)
+            return await i.response.send_message("❌ 既にベット済みです。", ephemeral=True)
 
+        # 1. 入力値の解析
         user_input = self.bet_input.value.strip().lower()
         is_test = (user_input == "test")
-
+        
+        # 2. ベット額の確定
         if is_test:
             bet_amt = 0
         else:
@@ -53,40 +56,42 @@ class CrashBetModal(discord.ui.Modal, title="💸 クラッシュにベット"):
                 bet_amt = int(user_input)
                 if bet_amt <= 0: raise ValueError
             except ValueError:
-                return await i.response.send_message("❌ 正しいコイン数を入力するか、テストプレイなら「test」と入力してください。", ephemeral=True)
+                return await i.response.send_message("❌ 正しいコイン数を入力してください。", ephemeral=True)
 
+        # 3. 自動利確設定の解析
         auto_val = self.auto_input.value.strip()
         auto_cashout_at = None
         if auto_val:
             try:
                 auto_cashout_at = round(float(auto_val), 2)
-                if auto_cashout_at <= 1.0:
-                    return await i.response.send_message("❌ 自動利確倍率は 1.01x 以上で指定してください。", ephemeral=True)
+                if auto_cashout_at <= 1.0: return await i.response.send_message("❌ 1.01x以上で指定してください。", ephemeral=True)
             except ValueError:
-                return await i.response.send_message("❌ 倍率は数字（例: 1.5 や 2.00）で入力してください。", ephemeral=True)
+                return await i.response.send_message("❌ 倍率は数字で入力してください。", ephemeral=True)
 
+        # 4. コイン消費とランク処理（非テスト時のみ）
+        rank_emb = None
         if not is_test:
             res = self.view.bot.supabase.table("user_coins").select("coin_count").eq("user_id", str(i.user.id)).execute()
             current_coins = res.data[0].get('coin_count', 0) if res.data else 0
-
             if current_coins < bet_amt:
                 return await i.response.send_message(f"❌ コインが足りません！ (所持: {current_coins:,}枚)", ephemeral=True)
 
+            # DB更新
             self.view.bot.supabase.table("user_coins").update({"coin_count": current_coins - bet_amt}).eq("user_id", str(i.user.id)).execute()
+            
+            # ランク処理 (ベット額確定・コイン消費後に行う)
+            rank_emb = await process_rank_system(self.view.bot, i.user.id, bet_amt)
 
+        # 5. プレイヤー登録
         player_obj = CrashPlayer(i.user, bet_amt, auto_cashout_at)
         self.view.players.append(player_obj)
 
-        # 📣 でかでかと注意書きを入れた通知メッセージ
+        # 6. メッセージ送信
         msg = f"🧪 **テストモード**" if is_test else f"✅ **{bet_amt:,}枚**"
-        if auto_cashout_at:
-            msg += f"（🤖自動利確: `{auto_cashout_at:.2f}x`）"
-        msg += " でゲームに参加しました！\n\n"
-        msg += "⚠️ **【重要：画面表示について】**\n"
-        msg += "Discord側のシステム制限（連投リミット）により、倍率が上昇するスピードに画面の更新が追いつかず、途中で**画面が一瞬固まったりカクついたりする可能性**があります。\n"
-        msg += "ですが、プログラムの内部処理では**設定された倍率に達した瞬間に100%自動利確（キャッシュアウト）されています**ので、そのまま安心してお見守りください！"
+        if auto_cashout_at: msg += f"（🤖自動: `{auto_cashout_at:.2f}x`）"
+        msg += " でゲームに参加しました！\n\n⚠️ **【注意】** 画面更新がカクつくことがありますが、内部処理は正確に行われます。"
 
-        await i.response.send_message(msg, ephemeral=True)
+        await i.response.send_message(content=msg, embed=rank_emb, ephemeral=True)
         await self.view.update_panel_message()
 
 
