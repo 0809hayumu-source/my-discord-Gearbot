@@ -7,6 +7,32 @@ import datetime
 
 # --- 設定項目 ---
 # カッコの中は "TOKEN" という名前の「枠」を指定するだけです
+
+from flask import Flask
+from threading import Thread
+
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+import os # 先頭でosをインポートしているか確認
+
+# --- Flaskの設定部分を修正 ---
+def run():
+    # Renderが指定するポート番号を自動で取得するように変更
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# --- 既存のコードの前に追加 ---
+keep_alive()
+# ---------------------------
 TOKEN = os.getenv("TOKEN") 
 if not TOKEN:
     raise ValueError("エラー: GitHubのSecretsに TOKEN が登録されていません！")
