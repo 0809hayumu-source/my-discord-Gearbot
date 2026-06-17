@@ -6,7 +6,9 @@ from supabase import create_client, Client
 import datetime
 
 # --- 設定項目 ---
-TOKEN = os.getenv("TOKEN") or "MTM1ODAyNDA2MjkxMTM4NTczMg.GzoW9w.8p4tjwMP_tik-qmCICmczFyoMnhgKbP2ssGehI"
+TOKEN = os.getenv("MTM1ODAyNDA2MjkxMTM4NTczMg.GioyNC.7AE_5QjknnCsJcAnLKMSSm44tuaesp2gi2DiwI")
+if not TOKEN:
+    raise ValueError("エラー: TOKENが環境変数に設定されていません！")
 SUPABASE_URL = "https://vlkydiqtnojdpeictmfy.supabase.co"
 SUPABASE_KEY = "sb_publishable_flcUiiaSmbpVYgaCMuenQQ_wkUJ7EG2" 
 GUILD_ID = 1492877145964286062
@@ -23,6 +25,7 @@ class MyBot(commands.Bot):
             res = self.supabase.table("user_coins").select("coin_count").eq("user_id", str(user_id)).execute()
             return res.data[0].get("coin_count", 0) if res.data else 0
         except: return 0
+
 
     def add_data(self, user_id, coins=0):
         curr_c = self.load_data(user_id)
@@ -191,5 +194,11 @@ class MyBot(commands.Bot):
         """Botが完全に起動したときに実行される処理"""
         print(f"🚀 {self.user} 起動完了！すべての機能と永続化ボタンが正常にロードされました。")
 
-bot = MyBot()
-bot.run(TOKEN)
+if __name__ == "__main__":
+    bot = MyBot()
+    
+    # 最後に run を1回だけ呼び出す（ループは bot.run の中で制御する）
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        print(f"❌ 致命的なエラー: {e}")
