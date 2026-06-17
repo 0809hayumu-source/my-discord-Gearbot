@@ -6,9 +6,10 @@ from supabase import create_client, Client
 import datetime
 
 # --- 設定項目 ---
-TOKEN = os.getenv("MTM1ODAyNDA2MjkxMTM4NTczMg.GioyNC.7AE_5QjknnCsJcAnLKMSSm44tuaesp2gi2DiwI")
+# カッコの中は "TOKEN" という名前の「枠」を指定するだけです
+TOKEN = os.getenv("TOKEN") 
 if not TOKEN:
-    raise ValueError("エラー: TOKENが環境変数に設定されていません！")
+    raise ValueError("エラー: GitHubのSecretsに TOKEN が登録されていません！")
 SUPABASE_URL = "https://vlkydiqtnojdpeictmfy.supabase.co"
 SUPABASE_KEY = "sb_publishable_flcUiiaSmbpVYgaCMuenQQ_wkUJ7EG2" 
 GUILD_ID = 1492877145964286062
